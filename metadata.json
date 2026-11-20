@@ -1,0 +1,9 @@
+{
+  "name": "DisplayBuddy",
+  "description": "Compact display brightness controller for Windows and Linux. Adjust the brightness of every connected monitor (laptop panel and DDC/CI external displays) with sliders and presets. Runs in the system tray and starts minimized when you sign in.",
+  "type": "app",
+  "version": "1.0.0",
+  "category": "Utilities",
+  "ageRating": "7+",
+  "containsAds": false
+}
