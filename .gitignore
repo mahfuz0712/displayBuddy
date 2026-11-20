@@ -2,4 +2,5 @@ build/
 build-windows/
 build-linux/
 dist/
+dist-linux/
 setup/
