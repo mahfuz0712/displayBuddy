@@ -2,11 +2,11 @@
 ;
 ; 1) In the MSYS2 UCRT64 terminal run:  ./deploy-windows.sh      (creates the "dist" folder)
 ; 2) Open this file in Inno Setup and press Ctrl+F9 (Build > Compile)
-; 3) Your installer appears in:  installer-output\DisplayBuddy-Setup-<version>.exe
+; 3) Your installer appears in:  setup\output\DisplayBuddy-Setup-<version>.exe
 
 #define MyAppName      "DisplayBuddy"
 #define MyAppVersion   "1.0.0"
-#define MyAppPublisher "DisplayBuddy"
+#define MyAppPublisher "Mohammad Mahfuz Rahman"
 #define MyAppExeName   "displaybuddy.exe"
 
 [Setup]
@@ -29,7 +29,7 @@ LicenseFile=..\LICENSE
 SetupIconFile=..\resources\icons\displaybuddy.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
-OutputDir=..\installer-output
+OutputDir=..\setup\output
 OutputBaseFilename=DisplayBuddy-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
