@@ -1,5 +1,10 @@
-"""Regenerates resources/icons/* (needs: pip install pillow). Run from the project root:
-    python tools/make_icons.py"""
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["pillow"]
+# ///
+"""Regenerates resources/icons/*. Run from the project root (uv installs pillow by itself):
+    uv run tools/make_icons.py
+Without uv:  pip install pillow  and  python tools/make_icons.py"""
 import os
 from PIL import Image, ImageDraw
 import math

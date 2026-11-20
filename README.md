@@ -96,7 +96,8 @@ Shows three fake displays (internal, DDC/CI, unsupported).
 
 ## Regenerating the icons
 
-`python tools/make_icons.py` (needs `pillow`) rebuilds the `.ico` and all PNG sizes in `resources/icons/`.
+`uv run tools/make_icons.py` rebuilds the `.ico` and all PNG sizes in `resources/icons/` (uv installs `pillow` on the fly, no project setup needed).
+Without uv: `pip install pillow` and `python tools/make_icons.py`.
 
 ## Project layout
 
