@@ -21,8 +21,9 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 DisableDirPage=auto
-; Per-user install: no admin prompt, and the startup entry goes to the same user's registry.
-PrivilegesRequired=lowest
+; Machine-wide install for ALL users: needs admin, installs to Program Files,
+; shortcuts go to the All Users Start Menu / Desktop, startup entry goes to HKLM.
+PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile=..\LICENSE
@@ -39,20 +40,21 @@ WizardStyle=modern
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-; Ticked by default: start DisplayBuddy (in the system tray) when you sign in to Windows.
-Name: "startup";     Description: "Start {#MyAppName} when Windows starts (runs in the system tray)"; GroupDescription: "Startup:"
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
+; Ticked by default: start DisplayBuddy (in the system tray) for every user when they sign in to Windows.
+Name: "startup";     Description: "Start {#MyAppName} when Windows starts, for all users (runs in the system tray)"; GroupDescription: "Startup:"
+Name: "desktopicon"; Description: "Create a &desktop shortcut for all users"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Files]
 Source: "..\dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
+; {autoprograms} / {autodesktop} resolve to the All Users folders in an admin install.
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}";  Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
-; Same value the in-app "Start with Windows" switch uses, so the two always agree.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --minimized"; Flags: uninsdeletevalue; Tasks: startup
+; System-wide startup: HKLM Run runs for every user who signs in.
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --minimized"; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
