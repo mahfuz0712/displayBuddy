@@ -9,8 +9,10 @@
 #include "theme.h"
 
 class QLabel;
+class QMenu;
 class QPushButton;
 class QScrollArea;
+class QSystemTrayIcon;
 class QThread;
 class QToolButton;
 class QVBoxLayout;
@@ -25,6 +27,15 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // True when a system tray icon is shown (the window then hides to the tray instead of closing).
+    bool hasTray() const { return m_tray != nullptr; }
+
+public slots:
+    // Brings the window back from the tray / minimized state and focuses it.
+    void showFromTray();
+    // Really exits the app (closing the window only hides it to the tray).
+    void quitApp();
 
 signals:
     void requestScan();
@@ -53,6 +64,10 @@ private:
     // theme / chrome
     void applyTheme();
     void applyWindowChrome();
+
+    // system tray
+    void setupTray();
+    void saveWindowGeometry();
 
     // presets
     void loadCustomPresets();
@@ -97,4 +112,9 @@ private:
     QStringList m_errors;
     int m_marginMode = -1;
     bool m_chromeApplied = false;
+
+    QSystemTrayIcon* m_tray = nullptr;
+    QMenu* m_trayMenu = nullptr;
+    bool m_quitting = false;
+    bool m_trayHintShown = false;
 };

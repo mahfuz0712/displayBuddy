@@ -9,7 +9,7 @@ set(CMAKE_AUTORCC ON)
 
 option(DISPLAYBUDDY_FAKE_DISPLAYS "Use three fake displays (UI development without hardware, e.g. on WSL)" OFF)
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Network)
 
 set(DISPLAYBUDDY_SOURCES
     src/main.cpp
@@ -53,7 +53,7 @@ if(DISPLAYBUDDY_FAKE_DISPLAYS)
     target_compile_definitions(displaybuddy PRIVATE DISPLAYBUDDY_FAKE_DISPLAYS)
 endif()
 
-target_link_libraries(displaybuddy PRIVATE Qt6::Widgets)
+target_link_libraries(displaybuddy PRIVATE Qt6::Widgets Qt6::Network)   # Network: single-instance socket
 
 if(WIN32)
     set_target_properties(displaybuddy PROPERTIES WIN32_EXECUTABLE ON)

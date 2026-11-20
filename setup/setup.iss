@@ -1,6 +1,6 @@
 ; DisplayBuddy installer script for Inno Setup 6.3 or newer  (https://jrsoftware.org/isinfo.php)
 ;
-; 1) In the MSYS2 UCRT64 terminal run:  ./deploy-windows.sh      (creates the "dist" folder)
+; 1) In the MSYS2 UCRT64 terminal run:  ./deploy.sh --windows    (creates the "dist" folder)
 ; 2) Open this file in Inno Setup and press Ctrl+F9 (Build > Compile)
 ; 3) Your installer appears in:  setup\output\DisplayBuddy-Setup-<version>.exe
 
@@ -57,7 +57,8 @@ Name: "{autodesktop}\{#MyAppName}";  Filename: "{app}\{#MyAppExeName}"; Tasks: d
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --minimized"; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; After installing, DisplayBuddy starts minimized: only its icon appears in the system tray.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--minimized"; Description: "Start {#MyAppName} now (in the system tray)"; Flags: nowait postinstall
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "StopDisplayBuddy"

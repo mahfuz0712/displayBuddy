@@ -1,4 +1,4 @@
-# DisplayBuddy 1.3
+# DisplayBuddy 1.0.0
 
 Compact C++20 / Qt 6 display-brightness controller with a Windows 11 (Fluent) look.
 
@@ -13,11 +13,16 @@ Compact C++20 / Qt 6 display-brightness controller with a Windows 11 (Fluent) lo
 - DisplayBuddy app icon: `resources/icons/displaybuddy.ico` (16-256 px) for the Windows title bar, taskbar and `.exe`
   (via `resources/displaybuddy.rc.in`), plus PNG/SVG + `.desktop` file for Linux.
 - Presets: Designing 85 %, Coding 65 %, Editing 95 %, and your own. Save with **New preset** (or Settings menu),
-  delete with right-click on a custom preset or Settings > Delete custom preset. Stored with `QSettings`
-  (presets from DisplayBuddy 1.2 are migrated automatically).
+  delete with right-click on a custom preset or Settings > Delete custom preset. Stored with `QSettings`.
 - No Apply button: brightness is sent when you release the slider, click on the track, or stop using keyboard/mouse-wheel.
 - Hardware access runs on a worker thread, so the window never freezes while Windows/`ddcutil` talk to the monitors.
 - Window size/position is remembered.
+- System tray: DisplayBuddy shows a tray icon; the close (X) button only hides the window to the tray, so the app keeps
+  running. Click the tray icon to open it again, right-click > **Quit** (or Settings > Quit DisplayBuddy) to exit.
+  `displaybuddy --minimized` starts straight into the tray. Only one copy runs at a time; starting it again just
+  brings the running window to the front.
+- The Windows installer starts DisplayBuddy minimized in the tray after installing, and (optional task, on by default)
+  for every user when Windows starts (`HKLM\...\Run`).
 
 ## Build: Windows (MSYS2 UCRT64)
 
@@ -30,6 +35,15 @@ cmake --build build-windows --parallel
 ```
 
 To run the `.exe` outside MSYS2: `windeployqt6 build-windows/displaybuddy.exe` (or copy the Qt DLLs next to it).
+
+### Windows installer
+
+```bash
+./deploy.sh --windows      # in the MSYS2 UCRT64 terminal; creates the "dist" folder
+```
+
+Then open `setup/setup.iss` in Inno Setup 6.3+ and press Ctrl+F9. The installer is written to
+`setup/output/DisplayBuddy-Setup-<version>.exe` (machine-wide install, needs admin).
 
 ## Build: Ubuntu
 
@@ -45,6 +59,12 @@ Optional install (adds the menu entry and hicolor icons so the launcher/taskbar 
 
 ```bash
 sudo cmake --install build-linux --prefix /usr/local
+```
+
+Or build and stage an install tree into `dist-linux/` with one command:
+
+```bash
+./deploy.sh --linux
 ```
 
 Do not reuse one CMake build directory between Windows and WSL/Linux.
@@ -73,6 +93,8 @@ Shows three fake displays (internal, DDC/CI, unsupported).
 
 ```
 CMakeLists.txt
+deploy.sh    ./deploy.sh --windows (MSYS2, makes dist/) or ./deploy.sh --linux (makes dist-linux/)
+setup/       setup.iss (Inno Setup installer script)
 resources/   resources.qrc, displaybuddy.rc.in, displaybuddy.desktop, icons/
 src/         main, mainwindow, widgets (slider/cards/grid), flowlayout, icons, theme,
              brightnessbackend (Windows/Linux), brightnessworker (thread)

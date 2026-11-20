@@ -5,6 +5,7 @@
 #include "icons.h"
 #include "widgets.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDialog>
@@ -22,6 +23,7 @@
 #include <QSlider>
 #include <QStyle>
 #include <QStyleHints>
+#include <QSystemTrayIcon>
 #include <QThread>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -220,6 +222,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     QSettings s = appSettings();
     restoreGeometry(s.value("window/geometry").toByteArray());
 
+    setupTray();
     loadCustomPresets();
     applyTheme(); // builds icons, presets and (empty) display list
     refreshDisplays();
@@ -279,11 +282,77 @@ void MainWindow::showEvent(QShowEvent *event)
     }
 }
 
-void MainWindow::closeEvent(QCloseEvent *event)
+void MainWindow::saveWindowGeometry()
 {
     QSettings s = appSettings();
     s.setValue("window/geometry", saveGeometry());
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    saveWindowGeometry();
+
+    // The X button only hides the window to the system tray; the app keeps running.
+    // Real exits (tray "Quit", Settings > Quit, Windows shutdown/sign-out) are let through.
+    if (!m_quitting && m_tray && m_tray->isVisible() && !qApp->isSavingSession())
+    {
+        event->ignore();
+        hide();
+        if (!m_trayHintShown)
+        {
+            m_trayHintShown = true;
+            m_tray->showMessage("DisplayBuddy", "DisplayBuddy is still running in the system tray.",
+                                QSystemTrayIcon::Information, 3000);
+        }
+        return;
+    }
     QMainWindow::closeEvent(event);
+}
+
+// ------------------------------------------------------------------ tray ----
+
+void MainWindow::setupTray()
+{
+#ifndef Q_OS_WIN
+    // On Windows the tray is always assumed to exist (Explorer may not be ready yet at sign-in,
+    // Qt re-adds the icon once it is). Elsewhere, fall back to a normal window if there is no tray.
+    if (!QSystemTrayIcon::isSystemTrayAvailable())
+        return;
+#endif
+
+    m_trayMenu = new QMenu(this);
+    QAction *open = m_trayMenu->addAction("Open DisplayBuddy");
+    m_trayMenu->addSeparator();
+    QAction *quit = m_trayMenu->addAction("Quit");
+    connect(open, &QAction::triggered, this, &MainWindow::showFromTray);
+    connect(quit, &QAction::triggered, this, &MainWindow::quitApp);
+
+    m_tray = new QSystemTrayIcon(Icons::appIcon(), this);
+    m_tray->setToolTip("DisplayBuddy");
+    m_tray->setContextMenu(m_trayMenu);
+    connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason)
+            {
+                if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick)
+                    showFromTray();
+            });
+    m_tray->show();
+}
+
+void MainWindow::showFromTray()
+{
+    setWindowState((windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
+    show();
+    raise();
+    activateWindow();
+}
+
+void MainWindow::quitApp()
+{
+    m_quitting = true;
+    saveWindowGeometry();
+    if (m_tray)
+        m_tray->hide();   // remove the icon right away instead of leaving a ghost in the tray
+    QApplication::quit();
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
@@ -490,6 +559,7 @@ void MainWindow::showSettingsMenu()
     menu.addSeparator();
     QAction *refresh = menu.addAction(Icons::icon(Icons::Kind::Refresh, m_theme.text), "Refresh displays");
     QAction *about = menu.addAction("About DisplayBuddy");
+    QAction *quit = menu.addAction("Quit DisplayBuddy");
 
     QAction *chosen = menu.exec(m_settingsButton->mapToGlobal(QPoint(m_settingsButton->width() - menu.sizeHint().width(),
                                                                      m_settingsButton->height() + 2)));
@@ -497,6 +567,8 @@ void MainWindow::showSettingsMenu()
         createCustomPreset();
     else if (chosen == refresh)
         refreshDisplays();
+    else if (chosen == quit)
+        quitApp();
     else if (chosen == about)
         QMessageBox::about(this, "About DisplayBuddy",
                            QString("<b>DisplayBuddy %1</b><br>Display brightness for every connected monitor.<br><br>"

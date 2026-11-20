@@ -2,3 +2,4 @@ build/
 build-windows/
 build-linux/
 dist/
+setup/
