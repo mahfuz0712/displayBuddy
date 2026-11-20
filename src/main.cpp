@@ -6,6 +6,8 @@
 #include <QFont>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QSystemTrayIcon>
+#include <QThread>
 
 namespace {
 
@@ -47,6 +49,19 @@ int main(int argc, char* argv[]) {
             return 0;
         }
     }
+#ifdef Q_OS_LINUX
+    // Autostart at sign-in (--minimized): the desktop's tray may not be up yet, so wait for it
+    // for up to 30 s. If there is still no tray, quit quietly: an autostarted copy would be
+    // invisible and useless. Starting DisplayBuddy from the app menu still opens the window.
+    if (minimized) {
+        for (int i = 0; i < 60 && !QSystemTrayIcon::isSystemTrayAvailable(); ++i) {
+            QThread::msleep(500);
+            QCoreApplication::processEvents();
+        }
+        if (!QSystemTrayIcon::isSystemTrayAvailable()) return 0;
+    }
+#endif
+
     QLocalServer::removeServer(name);   // clean up a stale socket left by a crash (Linux)
     QLocalServer server;
     server.listen(name);

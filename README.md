@@ -61,11 +61,20 @@ Optional install (adds the menu entry and hicolor icons so the launcher/taskbar 
 sudo cmake --install build-linux --prefix /usr/local
 ```
 
-Or build and stage an install tree into `dist-linux/` with one command:
+### Linux installer (.deb)
+
+Two steps, like on Windows:
 
 ```bash
-./deploy.sh --linux
+sudo apt install -y build-essential cmake ninja-build qt6-base-dev dpkg-dev
+./deploy.sh --linux                  # builds the app into dist-linux/
+./setup/linux_setup.sh               # packs dist-linux/ into setup/output/DisplayBuddy-Setup-1.0.0.deb
+sudo apt install ./setup/output/DisplayBuddy-Setup-1.0.0.deb
 ```
+
+The package installs to `/usr` for all users and adds `/etc/xdg/autostart/displaybuddy.desktop`, so DisplayBuddy
+starts minimized in the system tray when any user signs in. On GNOME the tray needs the AppIndicator extension
+(preinstalled on Ubuntu). Remove it with `sudo apt remove displaybuddy`.
 
 Do not reuse one CMake build directory between Windows and WSL/Linux.
 
@@ -94,7 +103,7 @@ Shows three fake displays (internal, DDC/CI, unsupported).
 ```
 CMakeLists.txt
 deploy.sh    ./deploy.sh --windows (MSYS2, makes dist/) or ./deploy.sh --linux (makes dist-linux/)
-setup/       setup.iss (Inno Setup installer script)
+setup/       setup.iss (Windows installer, Inno Setup), linux_setup.sh (packs dist-linux/ into a .deb in setup/output/)
 resources/   resources.qrc, displaybuddy.rc.in, displaybuddy.desktop, icons/
 src/         main, mainwindow, widgets (slider/cards/grid), flowlayout, icons, theme,
              brightnessbackend (Windows/Linux), brightnessworker (thread)

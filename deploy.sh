@@ -4,9 +4,9 @@
 #   ./deploy.sh --windows   Run inside the MSYS2 UCRT64 terminal.
 #                           Builds the app and collects everything needed to run it on any
 #                           Windows PC into ./dist  (then build setup/setup.iss with Inno Setup).
-#   ./deploy.sh --linux     Run on Ubuntu/Debian/Fedora etc.
-#                           Builds the app and stages an installable tree into ./dist-linux
-#                           (bin/, share/applications, share/icons).
+#   ./deploy.sh --linux     Run on Ubuntu/Debian (or WSL).
+#                           Builds the app into ./dist-linux (bin/, share/applications, share/icons),
+#                           then run ./setup/linux_setup.sh to pack it into a .deb installer.
 #   ./deploy.sh --help
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -74,7 +74,7 @@ deploy_linux() {
     echo
     echo "Done. Staged install tree: $(pwd)/$DIST  ($(du -sh "$DIST" | cut -f1))"
     echo "Test it:     ./$DIST/bin/displaybuddy"
-    echo "Install it:  sudo cmake --install $BUILD --prefix /usr/local"
+    echo "Then run ./setup/linux_setup.sh to build the .deb installer (setup/output/)"
 }
 
 case "${1:-}" in

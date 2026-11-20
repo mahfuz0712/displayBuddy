@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DisplayBuddy
+Comment=Control the brightness of all your displays (starts in the system tray)
+Exec=displaybuddy --minimized
+Icon=displaybuddy
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
