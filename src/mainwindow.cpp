@@ -1,439 +1,596 @@
 #include "mainwindow.h"
 
-#include <QComboBox>
-#include <QSlider>
-#include <QLabel>
-#include <QPushButton>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QFrame>
-#include <QMessageBox>
-#include <QFont>
+#include "brightnessworker.h"
+#include "flowlayout.h"
+#include "icons.h"
+#include "widgets.h"
+
 #include <QApplication>
-#include <QClipboard>
-#include <QStyle>
-#include <QScrollArea>
-#include <QInputDialog>
-#include <QSettings>
-#include <QTimer>
-#include <QMenu>
-#include <QToolButton>
+#include <QCloseEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFrame>
+#include <QGuiApplication>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QLineEdit>
-#include <QPainter>
-#include <QStyleOption>
-#include <QSizePolicy>
+#include <QMenu>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QSettings>
+#include <QSlider>
+#include <QStyle>
+#include <QStyleHints>
+#include <QThread>
+#include <QToolButton>
+#include <QVBoxLayout>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dwmapi.h>
+#endif
 
 namespace {
-class GlyphLabel : public QLabel {
-public:
-    explicit GlyphLabel(const QString& glyph, QWidget* parent = nullptr) : QLabel(glyph, parent) {
-        setAlignment(Qt::AlignCenter);
-        setFixedSize(28, 28);
-        setObjectName("glyph");
-    }
+
+struct BuiltinPreset {
+    const char* name;
+    int value;
 };
+constexpr BuiltinPreset kBuiltinPresets[] = {{"Designing", 85}, {"Coding", 65}, {"Editing", 95}};
+
+bool isBuiltinName(const QString& name) {
+    for (const auto& p : kBuiltinPresets)
+        if (name.compare(QString::fromLatin1(p.name), Qt::CaseInsensitive) == 0) return true;
+    return false;
 }
+
+QSettings appSettings() { return QSettings("DisplayBuddy", "DisplayBuddy"); }
+
+QLabel* iconLabel(Icons::Kind kind, const QColor& color, int size, qreal dpr) {
+    auto* l = new QLabel;
+    l->setPixmap(Icons::pixmap(kind, color, size, dpr));
+    l->setFixedSize(size, size);
+    l->setAttribute(Qt::WA_TranslucentBackground);
+    return l;
+}
+
+// Small modal dialog: preset name + brightness.
+class PresetDialog : public QDialog {
+public:
+    PresetDialog(int initial, QWidget* parent) : QDialog(parent) {
+        setWindowTitle("New preset");
+        setModal(true);
+        setMinimumWidth(320);
+
+        auto* lay = new QVBoxLayout(this);
+        lay->setContentsMargins(20, 18, 20, 16);
+        lay->setSpacing(10);
+
+        auto* nameTitle = new QLabel("Preset name");
+        nameTitle->setObjectName("sectionTitle");
+        lay->addWidget(nameTitle);
+        m_name = new QLineEdit;
+        m_name->setMaxLength(18);
+        m_name->setPlaceholderText("e.g. Reading");
+        lay->addWidget(m_name);
+
+        auto* row = new QHBoxLayout;
+        auto* briTitle = new QLabel("Brightness");
+        briTitle->setObjectName("sectionTitle");
+        m_value = new QLabel;
+        m_value->setObjectName("brightnessValue");
+        row->addWidget(briTitle);
+        row->addStretch();
+        row->addWidget(m_value);
+        lay->addLayout(row);
+
+        m_slider = new ClickSlider;
+        m_slider->setValueQuiet(initial);
+        m_value->setText(QString::number(initial) + "%");
+        connect(m_slider, &QSlider::valueChanged, this, [this](int v) { m_value->setText(QString::number(v) + "%"); });
+        lay->addWidget(m_slider);
+
+        m_buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
+        m_buttons->button(QDialogButtonBox::Save)->setEnabled(false);
+        lay->addSpacing(6);
+        lay->addWidget(m_buttons);
+        connect(m_buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(m_buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        connect(m_name, &QLineEdit::textChanged, this, [this](const QString& t) {
+            m_buttons->button(QDialogButtonBox::Save)->setEnabled(!t.trimmed().isEmpty());
+        });
+        connect(m_name, &QLineEdit::returnPressed, this, [this] {
+            if (!m_name->text().trimmed().isEmpty()) accept();
+        });
+        m_name->setFocus();
+    }
+
+    QString presetName() const { return m_name->text().trimmed(); }
+    int presetValue() const { return m_slider->value(); }
+
+private:
+    QLineEdit* m_name = nullptr;
+    QLabel* m_value = nullptr;
+    ClickSlider* m_slider = nullptr;
+    QDialogButtonBox* m_buttons = nullptr;
+};
+
+}  // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("DisplayBuddy");
-    setMinimumSize(430, 520);
-    resize(470, 720);
-    setWindowFlags(windowFlags() & ~Qt::WindowMaximizeButtonHint);
+    setWindowIcon(Icons::appIcon());
+    setMinimumSize(340, 420);
+    resize(520, 700);
 
+    // ---- worker thread (all slow hardware access happens there) ----
+    m_thread = new QThread(this);
+    m_worker = new BrightnessWorker;
+    m_worker->moveToThread(m_thread);
+    connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
+    connect(this, &MainWindow::requestScan, m_worker, &BrightnessWorker::scan);
+    connect(this, &MainWindow::requestApply, m_worker, &BrightnessWorker::apply);
+    connect(m_worker, &BrightnessWorker::scanned, this, &MainWindow::onScanned);
+    connect(m_worker, &BrightnessWorker::applied, this, &MainWindow::onApplied);
+    m_thread->start();
+
+    // ---- layout ----
     auto* central = new QWidget(this);
-    auto* root = new QVBoxLayout(central);
-    root->setContentsMargins(22, 16, 22, 18);
-    root->setSpacing(12);
+    central->setObjectName("central");
+    m_root = new QVBoxLayout(central);
+    m_root->setContentsMargins(20, 12, 20, 14);
+    m_root->setSpacing(14);
 
-    // Compact title bar content.
     auto* header = new QHBoxLayout;
-    auto* brand = new QLabel("DisplayBuddy");
-    QFont brandFont = brand->font();
-    brandFont.setPointSize(11);
-    brandFont.setWeight(QFont::DemiBold);
-    brand->setFont(brandFont);
-    header->addWidget(brand);
+    header->setSpacing(10);
+    m_logo = new QLabel;
+    m_logo->setFixedSize(28, 28);
+    header->addWidget(m_logo);
+    auto* title = new QLabel("DisplayBuddy");
+    title->setObjectName("title");
+    header->addWidget(title);
     header->addStretch();
 
-    auto* refresh = new QToolButton;
-    refresh->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
-    refresh->setToolTip("Refresh displays");
-    refresh->setObjectName("toolButton");
-    refresh->setFixedSize(34, 34);
-    header->addWidget(refresh);
+    m_refreshButton = new QToolButton;
+    m_refreshButton->setObjectName("toolButton");
+    m_refreshButton->setToolTip("Refresh displays");
+    m_refreshButton->setFixedSize(36, 36);
+    m_refreshButton->setIconSize(QSize(20, 20));
+    m_refreshButton->setCursor(Qt::PointingHandCursor);
+    header->addWidget(m_refreshButton);
 
-    auto* settings = new QToolButton;
-    settings->setText("⚙");
-    settings->setToolTip("Preset settings");
-    settings->setObjectName("toolButton");
-    settings->setFixedSize(34, 34);
-    header->addWidget(settings);
-    root->addLayout(header);
+    m_settingsButton = new QToolButton;
+    m_settingsButton->setObjectName("toolButton");
+    m_settingsButton->setToolTip("Settings");
+    m_settingsButton->setFixedSize(36, 36);
+    m_settingsButton->setIconSize(QSize(20, 20));
+    m_settingsButton->setCursor(Qt::PointingHandCursor);
+    header->addWidget(m_settingsButton);
+    m_root->addLayout(header);
 
     auto* presetTitle = new QLabel("Presets");
-    presetTitle->setAlignment(Qt::AlignCenter);
     presetTitle->setObjectName("sectionTitle");
-    root->addWidget(presetTitle);
+    m_root->addWidget(presetTitle);
 
-    auto* presetRow = new QHBoxLayout;
-    presetRow->setSpacing(8);
-    const auto addPreset = [this, presetRow](const QString& name, int value) {
-        auto* button = new QPushButton(name);
-        button->setObjectName("presetButton");
-        button->setMinimumHeight(36);
-        presetRow->addWidget(button);
-        connect(button, &QPushButton::clicked, this, [this, name, value] {
-            applyPreset(name, value);
-        });
-    };
-    addPreset("Designing", 85);
-    addPreset("Coding", 65);
-    addPreset("Editing", 95);
-    root->addLayout(presetRow);
+    m_presetHost = new QWidget;
+    m_presetFlow = new FlowLayout(m_presetHost, 0, 10, 10);
+    m_root->addWidget(m_presetHost);
 
-    auto* customRow = new QHBoxLayout;
-    customRow->addStretch();
-    auto* customButton = new QPushButton("+ Custom preset");
-    customButton->setObjectName("customButton");
-    customRow->addWidget(customButton);
-    root->addLayout(customRow);
-
-    m_customPresetLayout = new QHBoxLayout;
-    m_customPresetLayout->setSpacing(8);
-    root->addLayout(m_customPresetLayout);
-
-    auto* line = new QFrame;
-    line->setFrameShape(QFrame::HLine);
-    line->setObjectName("separator");
-    root->addWidget(line);
-
-    m_count = new QLabel("Connected displays");
+    m_count = new QLabel("Displays");
     m_count->setObjectName("sectionTitle");
-    root->addWidget(m_count);
+    m_root->addWidget(m_count);
 
     auto* scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setObjectName("displayScroll");
-    m_listHost = new QWidget;
-    m_listLayout = new QVBoxLayout(m_listHost);
-    m_listLayout->setContentsMargins(0, 0, 0, 0);
-    m_listLayout->setSpacing(12);
-    m_listLayout->addStretch();
-    scroll->setWidget(m_listHost);
-    root->addWidget(scroll, 1);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_grid = new ResponsiveGrid;
+    scroll->setWidget(m_grid);
+    scroll->viewport()->setAutoFillBackground(false);
+    m_grid->setAutoFillBackground(false);
+    m_root->addWidget(scroll, 1);
 
     m_status = new QLabel("Detecting displays…");
     m_status->setObjectName("status");
     m_status->setWordWrap(true);
-    root->addWidget(m_status);
+    m_root->addWidget(m_status);
 
     setCentralWidget(central);
-    setStyleSheet(R"(
-        QMainWindow, QWidget {
-            background: #f3f4f8;
-            color: #252936;
-            font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
-            font-size: 9.5pt;
-        }
-        QLabel#sectionTitle {
-            color: #424858;
-            font-size: 9pt;
-            font-weight: 600;
-        }
-        QLabel#glyph {
-            color: #303744;
-            font-size: 18pt;
-            background: transparent;
-        }
-        QLabel#muted { color: #747b89; font-size: 8.5pt; }
-        QLabel#brightnessValue { color: #2867a8; font-size: 10pt; font-weight: 600; }
-        QLabel#status { color: #697181; font-size: 8.5pt; padding-top: 4px; }
-        QFrame#displayCard {
-            background: #ffffff;
-            border: 1px solid #dfe3eb;
-            border-radius: 10px;
-        }
-        QFrame#separator { color: #dce0e8; max-height: 1px; }
-        QScrollArea#displayScroll { background: transparent; }
-        QScrollArea#displayScroll QWidget { background: transparent; }
-        QPushButton#presetButton {
-            background: #ffffff;
-            color: #303744;
-            border: 1px solid #d6dbe5;
-            border-radius: 6px;
-            padding: 7px 12px;
-        }
-        QPushButton#presetButton:hover { background: #eaf3fc; border-color: #8bb8e6; }
-        QPushButton#customButton {
-            background: transparent;
-            color: #2867a8;
-            border: 0;
-            padding: 4px 2px;
-            font-weight: 600;
-        }
-        QPushButton#customButton:hover { color: #124c88; text-decoration: underline; }
-        QToolButton#toolButton {
-            background: transparent;
-            color: #50596a;
-            border: 0;
-            border-radius: 6px;
-            font-size: 15pt;
-        }
-        QToolButton#toolButton:hover { background: #e4e8f0; }
-        QSlider::groove:horizontal {
-            height: 4px;
-            background: #858b96;
-            border-radius: 2px;
-        }
-        QSlider::sub-page:horizontal { background: #2867a8; border-radius: 2px; }
-        QSlider::handle:horizontal {
-            background: #ffffff;
-            border: 2px solid #2867a8;
-            width: 14px;
-            height: 14px;
-            margin: -6px 0;
-            border-radius: 8px;
-        }
-        QSlider:disabled { opacity: 0.45; }
-        QMenu { background: white; border: 1px solid #d8dce5; padding: 4px; }
-        QMenu::item { padding: 7px 24px 7px 10px; border-radius: 4px; }
-        QMenu::item:selected { background: #e7f1fb; color: #1f5f9f; }
-        QDialog { background: #f3f4f8; }
-        QLineEdit {
-            background: white; border: 1px solid #cbd2df;
-            border-radius: 6px; padding: 7px;
-        }
-    )");
 
-    connect(refresh, &QToolButton::clicked, this, &MainWindow::refreshDisplays);
-    connect(customButton, &QPushButton::clicked, this, &MainWindow::saveCustomPreset);
-    connect(settings, &QToolButton::clicked, this, [this, settings] {
-        QMenu menu(this);
-        QAction* manage = menu.addAction("Manage custom presets");
-        QAction* chosen = menu.exec(settings->mapToGlobal(QPoint(0, settings->height())));
-        if (chosen == manage) {
-            QMenu manageMenu(this);
-            if (m_customPresets.isEmpty()) {
-                QAction* empty = manageMenu.addAction("No custom presets saved");
-                empty->setEnabled(false);
-            } else {
-                for (auto it = m_customPresets.cbegin(); it != m_customPresets.cend(); ++it) {
-                    QAction* action = manageMenu.addAction("Delete  " + it.key());
-                    connect(action, &QAction::triggered, this, [this, name = it.key()] {
-                        removeCustomPreset(name);
-                    });
-                }
-            }
-            manageMenu.exec(settings->mapToGlobal(QPoint(0, settings->height())));
-        }
-    });
+    connect(m_refreshButton, &QToolButton::clicked, this, &MainWindow::refreshDisplays);
+    connect(m_settingsButton, &QToolButton::clicked, this, &MainWindow::showSettingsMenu);
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { applyTheme(); });
+#endif
+
+    QSettings s = appSettings();
+    restoreGeometry(s.value("window/geometry").toByteArray());
 
     loadCustomPresets();
-    rebuildCustomPresetButtons();
+    applyTheme();          // builds icons, presets and (empty) display list
     refreshDisplays();
 }
 
-void MainWindow::loadCustomPresets() {
-    QSettings settings("DisplayBuddy", "DisplayBuddy");
-    const QStringList names = settings.value("customPresetNames").toStringList();
-    for (const QString& name : names)
-        m_customPresets.insert(name, settings.value("customPresets/" + name, 70).toInt());
+MainWindow::~MainWindow() {
+    m_thread->quit();
+    m_thread->wait();
 }
 
-void MainWindow::rebuildCustomPresetButtons() {
-    if (!m_customPresetLayout) return;
-    while (m_customPresetLayout->count() > 0) {
-        QLayoutItem* item = m_customPresetLayout->takeAt(0);
-        if (item->widget()) item->widget()->deleteLater();
+// ---------------------------------------------------------------- theme ----
+
+void MainWindow::applyTheme() {
+    m_theme = Theme::make(Theme::systemIsDark());
+    qApp->setPalette(m_theme.palette());
+    qApp->setStyleSheet(m_theme.styleSheet());
+
+    const qreal dpr = devicePixelRatioF();
+    m_logo->setPixmap(Icons::appIcon().pixmap(QSize(28, 28), dpr));
+    m_refreshButton->setIcon(Icons::icon(Icons::Kind::Refresh, m_theme.text));
+    m_settingsButton->setIcon(Icons::icon(Icons::Kind::Gear, m_theme.text));
+
+    rebuildPresets();
+    if (!m_cards.isEmpty() || !m_displays.isEmpty()) buildDisplayCards();
+    applyWindowChrome();
+}
+
+void MainWindow::applyWindowChrome() {
+#ifdef Q_OS_WIN
+    // Windows 11 look: dark title bar, rounded corners, title bar tinted like the window.
+    // Attributes are ignored (harmlessly) on Windows versions that do not know them.
+    if (!isVisible() && !testAttribute(Qt::WA_WState_Created)) return;
+    const HWND hwnd = reinterpret_cast<HWND>(winId());
+    const BOOL dark = m_theme.dark ? TRUE : FALSE;
+    DwmSetWindowAttribute(hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
+    const DWORD corner = 2;   // DWMWCP_ROUND
+    DwmSetWindowAttribute(hwnd, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, &corner, sizeof(corner));
+    const COLORREF caption = RGB(m_theme.bg.red(), m_theme.bg.green(), m_theme.bg.blue());
+    DwmSetWindowAttribute(hwnd, 35 /*DWMWA_CAPTION_COLOR*/, &caption, sizeof(caption));
+    const COLORREF text = RGB(m_theme.text.red(), m_theme.text.green(), m_theme.text.blue());
+    DwmSetWindowAttribute(hwnd, 36 /*DWMWA_TEXT_COLOR*/, &text, sizeof(text));
+#endif
+}
+
+void MainWindow::showEvent(QShowEvent* event) {
+    QMainWindow::showEvent(event);
+    if (!m_chromeApplied) {
+        m_chromeApplied = true;
+        applyWindowChrome();
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    QSettings s = appSettings();
+    s.setValue("window/geometry", saveGeometry());
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    const int mode = width() < 430 ? 0 : 1;
+    if (mode != m_marginMode) {
+        m_marginMode = mode;
+        const int side = mode == 0 ? 12 : 20;
+        m_root->setContentsMargins(side, 12, side, 14);
+    }
+}
+
+// -------------------------------------------------------------- presets ----
+
+void MainWindow::loadCustomPresets() {
+    m_customPresets.clear();
+    QSettings s = appSettings();
+
+    const int n = s.beginReadArray("customPresetList");
+    for (int i = 0; i < n; ++i) {
+        s.setArrayIndex(i);
+        const QString name = s.value("name").toString();
+        if (!name.isEmpty()) m_customPresets.insert(name, qBound(0, s.value("value", 70).toInt(), 100));
+    }
+    s.endArray();
+
+    // Migrate presets saved by DisplayBuddy 1.2.
+    if (n == 0) {
+        const QStringList oldNames = s.value("customPresetNames").toStringList();
+        for (const QString& name : oldNames)
+            m_customPresets.insert(name, qBound(0, s.value("customPresets/" + name, 70).toInt(), 100));
+        if (!oldNames.isEmpty()) saveCustomPresets();
+    }
+}
+
+void MainWindow::saveCustomPresets() const {
+    QSettings s = appSettings();
+    s.remove("customPresetList");
+    s.beginWriteArray("customPresetList", static_cast<int>(m_customPresets.size()));
+    int i = 0;
+    for (auto it = m_customPresets.cbegin(); it != m_customPresets.cend(); ++it, ++i) {
+        s.setArrayIndex(i);
+        s.setValue("name", it.key());
+        s.setValue("value", it.value());
+    }
+    s.endArray();
+    s.remove("customPresetNames");
+    s.remove("customPresets");
+}
+
+void MainWindow::rebuildPresets() {
+    while (QLayoutItem* item = m_presetFlow->takeAt(0)) {
+        if (QWidget* w = item->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
         delete item;
     }
-    for (auto it = m_customPresets.cbegin(); it != m_customPresets.cend(); ++it) {
-        const QString name = it.key();
-        const int value = it.value();
-        auto* button = new QPushButton(name);
-        button->setObjectName("presetButton");
-        button->setMinimumHeight(32);
-        button->setToolTip(QString("Apply %1% brightness").arg(value));
-        m_customPresetLayout->addWidget(button);
-        connect(button, &QPushButton::clicked, this, [this, name, value] {
-            applyPreset(name, value);
-        });
-    }
-    m_customPresetLayout->addStretch();
+
+    const auto addCard = [this](const QString& name, int value, bool custom) {
+        auto* card = new PresetCard(name, value, custom, m_presetHost);
+        m_presetFlow->addWidget(card);
+        connect(card, &QPushButton::clicked, this, [this, name, value] { applyPreset(name, value); });
+        if (custom) {
+            card->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(card, &QWidget::customContextMenuRequested, this, [this, card, name](const QPoint& pos) {
+                QMenu menu(this);
+                QAction* del = menu.addAction(Icons::icon(Icons::Kind::Trash, m_theme.text), "Delete preset");
+                if (menu.exec(card->mapToGlobal(pos)) == del) removeCustomPreset(name);
+            });
+        }
+    };
+
+    for (const auto& p : kBuiltinPresets) addCard(QString::fromLatin1(p.name), p.value, false);
+    for (auto it = m_customPresets.cbegin(); it != m_customPresets.cend(); ++it)
+        addCard(it.key(), it.value(), true);
+
+    auto* add = new QPushButton("New preset", m_presetHost);
+    add->setObjectName("presetNew");
+    add->setIcon(Icons::icon(Icons::Kind::Plus, m_theme.accent));
+    add->setIconSize(QSize(16, 16));
+    add->setCursor(Qt::PointingHandCursor);
+    add->setMinimumHeight(58);
+    add->setToolTip("Save the current brightness as a custom preset");
+    connect(add, &QPushButton::clicked, this, &MainWindow::createCustomPreset);
+    m_presetFlow->addWidget(add);
+
+    updatePresetHighlight();
+    m_presetHost->updateGeometry();
 }
 
-void MainWindow::refreshDisplays() {
-    const auto previous = m_displays;
-    m_displays = BrightnessBackend::displays();
-    buildDisplayCards();
+void MainWindow::updatePresetHighlight() {
+    const auto cards = m_presetHost->findChildren<PresetCard*>();
+    for (PresetCard* c : cards)
+        c->setActive(!m_activePreset.isEmpty() && c->presetName() == m_activePreset);
+}
+
+int MainWindow::currentBrightnessGuess() const {
+    for (const auto& card : m_cards)
+        if (card.controllable && card.slider) return card.slider->value();
+    return 70;
+}
+
+void MainWindow::applyPreset(const QString& name, int value) {
+    int count = 0;
+    for (int i = 0; i < m_cards.size(); ++i) {
+        DisplayCard& card = m_cards[i];
+        if (!card.controllable) continue;
+        card.slider->setValueQuiet(value);
+        card.value->setText(QString::number(value) + "%");
+        m_displays[i].brightness = value;
+        queueApply(card.id, value);
+        ++count;
+    }
+    if (count == 0) {
+        setStatus("No controllable display is available for this preset.", true);
+        return;
+    }
+    m_activePreset = name;
+    updatePresetHighlight();
+    m_okMessage = QString("%1 preset applied to %2 display%3.").arg(name).arg(count).arg(count == 1 ? "" : "s");
+    setStatus(QString("Applying %1…").arg(name));
+}
+
+void MainWindow::createCustomPreset() {
     if (m_displays.isEmpty()) {
-        m_count->setText("No controllable displays found");
-        m_status->setText("Connect a display or check DDC/CI support. Refresh to scan again.");
+        setStatus("Connect a controllable display first.", true);
+        return;
+    }
+    PresetDialog dialog(currentBrightnessGuess(), this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const QString name = dialog.presetName();
+    if (name.isEmpty()) return;
+    if (isBuiltinName(name)) {
+        setStatus(QString("“%1” is a built-in preset name. Choose another name.").arg(name), true);
+        return;
+    }
+    m_customPresets.insert(name, dialog.presetValue());
+    saveCustomPresets();
+    m_activePreset.clear();
+    rebuildPresets();
+    setStatus(QString("Preset “%1” saved at %2%.").arg(name).arg(dialog.presetValue()));
+}
+
+void MainWindow::removeCustomPreset(const QString& name) {
+    if (!m_customPresets.remove(name)) return;
+    saveCustomPresets();
+    if (m_activePreset == name) m_activePreset.clear();
+    rebuildPresets();
+    setStatus(QString("Preset “%1” deleted.").arg(name));
+}
+
+void MainWindow::showSettingsMenu() {
+    QMenu menu(this);
+    QAction* save = menu.addAction(Icons::icon(Icons::Kind::Plus, m_theme.text), "Save current brightness as preset…");
+    QMenu* del = menu.addMenu(Icons::icon(Icons::Kind::Trash, m_theme.text), "Delete custom preset");
+    if (m_customPresets.isEmpty()) {
+        del->addAction("No custom presets saved")->setEnabled(false);
     } else {
-        m_count->setText(QString("Connected displays  ·  %1").arg(m_displays.size()));
-        m_status->setText("Brightness changes automatically when you release a slider.");
+        for (auto it = m_customPresets.cbegin(); it != m_customPresets.cend(); ++it) {
+            const QString name = it.key();
+            del->addAction(QString("%1  ·  %2%").arg(name).arg(it.value()), this,
+                           [this, name] { removeCustomPreset(name); });
+        }
+    }
+    menu.addSeparator();
+    QAction* refresh = menu.addAction(Icons::icon(Icons::Kind::Refresh, m_theme.text), "Refresh displays");
+    QAction* about = menu.addAction("About DisplayBuddy");
+
+    QAction* chosen = menu.exec(m_settingsButton->mapToGlobal(QPoint(m_settingsButton->width() - menu.sizeHint().width(),
+                                                                       m_settingsButton->height() + 2)));
+    if (chosen == save) createCustomPreset();
+    else if (chosen == refresh) refreshDisplays();
+    else if (chosen == about)
+        QMessageBox::about(this, "About DisplayBuddy",
+                           QString("<b>DisplayBuddy %1</b><br>Display brightness for every connected monitor.<br><br>"
+                                   "C++20 · Qt 6 · MIT License").arg(QApplication::applicationVersion()));
+}
+
+// -------------------------------------------------------------- displays ----
+
+void MainWindow::refreshDisplays() {
+    if (m_scanning) return;
+    m_scanning = true;
+    m_refreshButton->setEnabled(false);
+    setStatus("Detecting displays…");
+    emit requestScan();
+}
+
+void MainWindow::onScanned(const QVector<DisplayInfo>& displays) {
+    m_scanning = false;
+    m_refreshButton->setEnabled(true);
+    m_displays = displays;
+    buildDisplayCards();
+
+    if (m_displays.isEmpty()) {
+        m_count->setText("Displays");
+        setStatus("No displays found. Check DDC/CI support, then refresh.", true);
+    } else {
+        m_count->setText(QString("Displays  ·  %1").arg(m_displays.size()));
+        setStatus("Brightness changes when you release a slider.");
     }
 }
 
 void MainWindow::buildDisplayCards() {
-    while (m_listLayout->count() > 0) {
-        QLayoutItem* item = m_listLayout->takeAt(0);
-        if (item->widget()) item->widget()->deleteLater();
-        delete item;
+    m_cards.clear();
+    QVector<QWidget*> items;
+    if (m_displays.isEmpty()) {
+        items << makeEmptyCard();
+    } else {
+        m_cards.resize(m_displays.size());
+        for (int i = 0; i < m_displays.size(); ++i) items << makeDisplayCard(i);
     }
-    m_widgets.clear();
+    m_grid->setItems(items);
+}
 
-    for (int i = 0; i < m_displays.size(); ++i) {
-        const DisplayInfo display = m_displays[i];
-        auto* card = new QFrame;
-        card->setObjectName("displayCard");
-        auto* layout = new QVBoxLayout(card);
-        layout->setContentsMargins(14, 12, 14, 12);
-        layout->setSpacing(9);
+QWidget* MainWindow::makeEmptyCard() {
+    auto* card = new QFrame;
+    card->setObjectName("displayCard");
+    auto* lay = new QVBoxLayout(card);
+    lay->setContentsMargins(20, 22, 20, 22);
+    lay->setSpacing(8);
+    lay->setAlignment(Qt::AlignCenter);
+    auto* icon = iconLabel(Icons::Kind::Monitor, m_theme.subtext, 32, devicePixelRatioF());
+    lay->addWidget(icon, 0, Qt::AlignHCenter);
+    auto* text = new QLabel("No displays detected");
+    text->setObjectName("sectionTitle");
+    text->setAlignment(Qt::AlignCenter);
+    lay->addWidget(text);
+    auto* hint = new QLabel("Connect a monitor and enable DDC/CI in its on-screen menu, then press refresh.");
+    hint->setObjectName("muted");
+    hint->setWordWrap(true);
+    hint->setAlignment(Qt::AlignCenter);
+    lay->addWidget(hint);
+    return card;
+}
 
-        auto* header = new QHBoxLayout;
-        auto* monitorIcon = new GlyphLabel("▣");
-        header->addWidget(monitorIcon);
-        auto* name = new QLabel(display.name);
-        name->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        name->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        header->addWidget(name, 1);
+QWidget* MainWindow::makeDisplayCard(int index) {
+    const DisplayInfo& d = m_displays[index];
+    const qreal dpr = devicePixelRatioF();
 
-        auto* menuButton = new QToolButton;
-        menuButton->setText("···");
-        menuButton->setObjectName("toolButton");
-        menuButton->setFixedSize(30, 28);
-        menuButton->setToolTip("Display options");
-        header->addWidget(menuButton);
-        layout->addLayout(header);
+    auto* card = new QFrame;
+    card->setObjectName("displayCard");
+    auto* lay = new QVBoxLayout(card);
+    lay->setContentsMargins(16, 14, 16, 14);
+    lay->setSpacing(12);
 
-        auto* brightnessRow = new QHBoxLayout;
-        auto* sunIcon = new GlyphLabel("☼");
-        brightnessRow->addWidget(sunIcon);
-        auto* slider = new QSlider(Qt::Horizontal);
-        slider->setRange(0, 100);
-        slider->setValue(display.brightness);
-        slider->setEnabled(display.controllable);
-        brightnessRow->addWidget(slider, 1);
-        auto* value = new QLabel(display.controllable ? QString::number(display.brightness) + "%" : "—");
-        value->setObjectName("brightnessValue");
-        value->setMinimumWidth(38);
-        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        brightnessRow->addWidget(value);
-        layout->addLayout(brightnessRow);
+    auto* top = new QHBoxLayout;
+    top->setSpacing(10);
+    top->addWidget(iconLabel(Icons::Kind::Monitor, d.controllable ? m_theme.text : m_theme.subtext, 22, dpr));
+    auto* name = new QLabel(d.name);
+    name->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    name->setToolTip(d.name);
+    top->addWidget(name, 1);
+    lay->addLayout(top);
 
-        auto* hint = new QLabel(display.controllable
-            ? "Brightness"
-            : "Detected, but brightness control is unavailable (check DDC/CI).");
+    auto* row = new QHBoxLayout;
+    row->setSpacing(10);
+    row->addWidget(iconLabel(Icons::Kind::Sun, d.controllable ? m_theme.accent : m_theme.track, 20, dpr));
+    auto* slider = new ClickSlider;
+    slider->setValueQuiet(d.brightness);
+    slider->setEnabled(d.controllable);
+    row->addWidget(slider, 1);
+    auto* value = new QLabel(d.controllable ? QString::number(d.brightness) + "%" : QString("—"));
+    value->setObjectName(d.controllable ? "brightnessValue" : "muted");
+    value->setFixedWidth(44);
+    value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    row->addWidget(value);
+    lay->addLayout(row);
+
+    if (!d.controllable) {
+        auto* hint = new QLabel("Detected, but brightness control is unavailable. Check DDC/CI in the monitor menu.");
         hint->setObjectName("muted");
         hint->setWordWrap(true);
-        layout->addWidget(hint);
-
-        DisplayWidgets widgets;
-        widgets.id = display.id;
-        widgets.value = value;
-        widgets.slider = slider;
-        widgets.status = hint;
-        widgets.debounce = new QTimer(this);
-        widgets.debounce->setSingleShot(true);
-        widgets.debounce->setInterval(180);
-        const int index = i;
-        connect(slider, &QSlider::valueChanged, this, [value, widgetsRef = &m_widgets, index](int v) {
-            value->setText(QString::number(v) + "%");
-        });
-        connect(slider, &QSlider::sliderReleased, this, [this, index, slider] {
-            setDisplayBrightness(index, slider->value());
-        });
-        connect(menuButton, &QToolButton::clicked, this, [this, menuButton, display] {
-            QMenu menu(this);
-            QAction* refreshAction = menu.addAction("Refresh display list");
-            QAction* copyName = menu.addAction("Copy display name");
-            QAction* selected = menu.exec(menuButton->mapToGlobal(QPoint(0, menuButton->height())));
-            if (selected == refreshAction) refreshDisplays();
-            if (selected == copyName) QApplication::clipboard()->setText(display.name);
-        });
-
-        m_widgets.push_back(widgets);
-        m_listLayout->addWidget(card);
+        lay->addWidget(hint);
     }
-    m_listLayout->addStretch();
+
+    DisplayCard& c = m_cards[index];
+    c.id = d.id;
+    c.name = d.name;
+    c.controllable = d.controllable;
+    c.value = value;
+    c.slider = slider;
+
+    connect(slider, &QSlider::valueChanged, value, [value](int v) { value->setText(QString::number(v) + "%"); });
+    connect(slider, &ClickSlider::committed, this, [this, index](int v) { setDisplayBrightness(index, v); });
+    return card;
 }
 
 void MainWindow::setDisplayBrightness(int index, int value) {
     if (index < 0 || index >= m_displays.size()) return;
-    QString error;
-    if (BrightnessBackend::setBrightness(m_displays[index].id, value, &error)) {
-        m_status->setText(QString("%1 brightness set to %2%.").arg(m_displays[index].name).arg(value));
-    } else {
-        m_status->setText("Brightness could not be changed.");
-        QMessageBox::warning(this, "DisplayBuddy", error);
+    if (m_displays[index].brightness == value) return;   // nothing changed
+    m_displays[index].brightness = value;
+    m_activePreset.clear();
+    updatePresetHighlight();
+    m_okMessage = QString("%1 set to %2%.").arg(m_displays[index].name).arg(value);
+    queueApply(m_displays[index].id, value);
+}
+
+void MainWindow::queueApply(const QString& id, int value) {
+    ++m_pending;
+    emit requestApply(id, value);
+}
+
+void MainWindow::onApplied(const QString&, int, bool ok, const QString& error) {
+    m_pending = qMax(0, m_pending - 1);
+    if (!ok && !error.isEmpty() && !m_errors.contains(error)) m_errors << error;
+    if (m_pending > 0) return;
+
+    if (!m_errors.isEmpty()) {
+        setStatus(m_errors.join(' '), true);
+        m_errors.clear();
+    } else if (!m_okMessage.isEmpty()) {
+        setStatus(m_okMessage);
     }
 }
 
-void MainWindow::applyPreset(const QString& name, int value) {
-    if (m_displays.isEmpty()) {
-        m_status->setText("No displays available for this preset.");
-        return;
+void MainWindow::setStatus(const QString& text, bool error) {
+    m_status->setText(text);
+    if (m_status->property("error").toBool() != error) {
+        m_status->setProperty("error", error);
+        m_status->style()->unpolish(m_status);
+        m_status->style()->polish(m_status);
     }
-    int success = 0;
-    for (int i = 0; i < m_displays.size(); ++i) {
-        if (!m_displays[i].controllable) continue;
-        if (i < m_widgets.size() && m_widgets[i].slider) {
-            m_widgets[i].slider->setValue(value);
-        }
-        QString error;
-        if (BrightnessBackend::setBrightness(m_displays[i].id, value, &error))
-            ++success;
-    }
-    m_status->setText(QString("%1 preset applied to %2 display(s).").arg(name).arg(success));
-}
-
-void MainWindow::saveCustomPreset() {
-    if (m_displays.isEmpty()) {
-        QMessageBox::information(this, "Custom preset", "Connect a controllable display first.");
-        return;
-    }
-
-    bool ok = false;
-    const QString name = QInputDialog::getText(
-        this, "Save custom preset", "Preset name:", QLineEdit::Normal, QString(), &ok
-    ).trimmed();
-    if (!ok || name.isEmpty()) return;
-
-    int value = 70;
-    for (const auto& display : m_displays) {
-        if (display.controllable) {
-            value = display.brightness;
-            break;
-        }
-    }
-
-    // If the user has moved a slider but not released it, use that live value.
-    for (const auto& widget : m_widgets) {
-        if (widget.slider && widget.slider->isEnabled()) {
-            value = widget.slider->value();
-            break;
-        }
-    }
-
-    m_customPresets.insert(name, value);
-    QStringList names = m_customPresets.keys();
-    QSettings settings("DisplayBuddy", "DisplayBuddy");
-    settings.setValue("customPresetNames", names);
-    settings.setValue("customPresets/" + name, value);
-
-    rebuildCustomPresetButtons();
-    m_status->setText(QString("Custom preset “%1” saved at %2%.").arg(name).arg(value));
-}
-
-void MainWindow::removeCustomPreset(const QString& name) {
-    m_customPresets.remove(name);
-    QSettings settings("DisplayBuddy", "DisplayBuddy");
-    settings.remove("customPresets/" + name);
-    settings.setValue("customPresetNames", m_customPresets.keys());
-    rebuildCustomPresetButtons();
-    m_status->setText("Custom preset removed.");
 }

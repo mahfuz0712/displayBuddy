@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DisplayBuddy
+GenericName=Display Brightness
+Comment=Control the brightness of all your displays
+Exec=displaybuddy
+Icon=displaybuddy
+Terminal=false
+Categories=Utility;Settings;HardwareSettings;
+Keywords=brightness;display;monitor;screen;
+StartupWMClass=displaybuddy

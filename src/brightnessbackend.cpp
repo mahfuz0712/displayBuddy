@@ -2,8 +2,12 @@
 
 #include <QDir>
 #include <QFile>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QThread>
 #include <algorithm>
 
 #ifdef Q_OS_WIN
@@ -91,6 +95,13 @@ static BOOL CALLBACK enumerateWindowsMonitor(HMONITOR monitor, HDC, LPRECT, LPAR
 }
 }
 
+// A GUI app must not flash a console window when it shells out to PowerShell.
+static void hideConsole(QProcess& p) {
+    p.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
+        args->flags |= CREATE_NO_WINDOW;
+    });
+}
+
 static QVector<DisplayInfo> windowsDisplays() {
     QVector<DisplayInfo> result;
     WinEnumContext context{&result};
@@ -99,6 +110,7 @@ static QVector<DisplayInfo> windowsDisplays() {
 
     // Internal laptop panel brightness is commonly exposed through WMI.
     QProcess p;
+    hideConsole(p);
     p.start("powershell.exe", {
         "-NoProfile", "-NonInteractive", "-Command",
         "$b=Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness -ErrorAction SilentlyContinue | Select-Object -First 1; if($b){'laptop|Internal display|' + $b.CurrentBrightness}"
@@ -131,6 +143,10 @@ static QVector<DisplayInfo> windowsDisplays() {
 #endif
 
 #ifdef Q_OS_LINUX
+// VCP 0x10 maximum per ddcutil display (monitors are not always 0..100).
+static QMutex g_ddcMaxMutex;
+static QHash<QString, int> g_ddcMax;
+
 static QVector<DisplayInfo> linuxDisplays() {
     QVector<DisplayInfo> result;
 
@@ -181,16 +197,17 @@ static QVector<DisplayInfo> linuxDisplays() {
                 const QString response = QString::fromLocal8Bit(get.readAllStandardOutput());
                 const auto nums = QRegularExpression(R"(\bVCP\s+10\s+.*?(\d+)\s+(\d+))")
                                       .match(response);
-                if (nums.hasMatch()) {
-                    d.brightness = nums.captured(1).toInt();
+                const auto match = nums.hasMatch()
+                    ? nums
+                    : QRegularExpression(R"(\b(\d+)\s+(\d+)\b)").match(response);
+                if (match.hasMatch()) {
+                    const int cur = match.captured(1).toInt();
+                    const int max = std::max(1, match.captured(2).toInt());
+                    d.maximum = max;
+                    d.brightness = std::clamp(qRound(cur * 100.0 / max), 0, 100);
                     d.controllable = true;
-                } else {
-                    const auto fallback = QRegularExpression(R"(\b(\d+)\s+(\d+)\b)")
-                                              .match(response);
-                    if (fallback.hasMatch()) {
-                        d.brightness = fallback.captured(1).toInt();
-                        d.controllable = true;
-                    }
+                    QMutexLocker lock(&g_ddcMaxMutex);
+                    g_ddcMax.insert(d.id, max);
                 }
             }
             if (!d.controllable) d.name += " (brightness unsupported)";
@@ -201,8 +218,26 @@ static QVector<DisplayInfo> linuxDisplays() {
 }
 #endif
 
+#ifdef DISPLAYBUDDY_FAKE_DISPLAYS
+static QMutex g_fakeMutex;
+static QHash<QString, int> g_fakeValues{{"fake:1", 70}, {"fake:2", 45}};
+
+static QVector<DisplayInfo> fakeDisplays() {
+    QThread::msleep(300);
+    QMutexLocker lock(&g_fakeMutex);
+    QVector<DisplayInfo> list;
+    DisplayInfo a; a.id = "fake:1"; a.name = "Internal display"; a.brightness = g_fakeValues["fake:1"];
+    DisplayInfo b; b.id = "fake:2"; b.name = "Dell U2720Q (DDC/CI)"; b.brightness = g_fakeValues["fake:2"];
+    DisplayInfo c; c.id = "fake:3"; c.name = "HDMI monitor (brightness unsupported)"; c.controllable = false;
+    list << a << b << c;
+    return list;
+}
+#endif
+
 QVector<DisplayInfo> BrightnessBackend::displays() {
-#ifdef Q_OS_WIN
+#ifdef DISPLAYBUDDY_FAKE_DISPLAYS
+    return fakeDisplays();
+#elif defined(Q_OS_WIN)
     return windowsDisplays();
 #elif defined(Q_OS_LINUX)
     return linuxDisplays();
@@ -214,9 +249,21 @@ QVector<DisplayInfo> BrightnessBackend::displays() {
 bool BrightnessBackend::setBrightness(const QString& id, int value, QString* error) {
     value = std::clamp(value, 0, 100);
 
+#ifdef DISPLAYBUDDY_FAKE_DISPLAYS
+    if (id.startsWith("fake:")) {
+        QThread::msleep(120);
+        QMutexLocker lock(&g_fakeMutex);
+        g_fakeValues[id] = value;
+        return true;
+    }
+    if (error) *error = "This display is not controllable by the current platform backend.";
+    return false;
+#endif
+
 #ifdef Q_OS_WIN
     if (id == "wmi:internal") {
         QProcess p;
+        hideConsole(p);
         p.start("powershell.exe", {
             "-NoProfile", "-NonInteractive", "-Command",
             QString("(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods | Select-Object -First 1).WmiSetBrightness(1,%1)").arg(value)
@@ -296,9 +343,14 @@ bool BrightnessBackend::setBrightness(const QString& id, int value, QString* err
     }
 
     if (id.startsWith("ddc:")) {
+        int max = 100;
+        {
+            QMutexLocker lock(&g_ddcMaxMutex);
+            max = g_ddcMax.value(id, 100);
+        }
         QProcess p;
         p.start("ddcutil", {
-            "setvcp", "10", QString::number(value),
+            "setvcp", "10", QString::number(qRound(value * max / 100.0)),
             "--display", id.mid(4)
         });
         if (!p.waitForFinished(10000) || p.exitCode() != 0) {

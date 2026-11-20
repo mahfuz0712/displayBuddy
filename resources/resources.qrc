@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icons/displaybuddy-16.png</file>
+        <file>icons/displaybuddy-24.png</file>
+        <file>icons/displaybuddy-32.png</file>
+        <file>icons/displaybuddy-48.png</file>
+        <file>icons/displaybuddy-64.png</file>
+        <file>icons/displaybuddy-128.png</file>
+        <file>icons/displaybuddy-256.png</file>
+        <file>icons/displaybuddy-512.png</file>
+    </qresource>
+</RCC>

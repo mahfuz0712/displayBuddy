@@ -1,0 +1,32 @@
+// Windows resource script (configured by CMake).
+// "1 ICON" = lowest numeric ID, which Explorer/taskbar use as the exe icon.
+1 ICON "@DISPLAYBUDDY_ICON_PATH@"
+
+1 VERSIONINFO
+FILEVERSION     @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION  @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          0x40004L
+FILETYPE        0x1L
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "DisplayBuddy\0"
+            VALUE "FileDescription",  "DisplayBuddy - display brightness controller\0"
+            VALUE "FileVersion",      "@PROJECT_VERSION@\0"
+            VALUE "InternalName",     "displaybuddy\0"
+            VALUE "OriginalFilename", "displaybuddy.exe\0"
+            VALUE "ProductName",      "DisplayBuddy\0"
+            VALUE "ProductVersion",   "@PROJECT_VERSION@\0"
+            VALUE "LegalCopyright",   "MIT License\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

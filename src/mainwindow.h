@@ -1,50 +1,100 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QVector>
 #include <QMap>
-#include "brightnessbackend.h"
+#include <QStringList>
+#include <QVector>
 
-class QScrollArea;
-class QVBoxLayout;
-class QHBoxLayout;
+#include "brightnessbackend.h"
+#include "theme.h"
+
 class QLabel;
-class QSlider;
 class QPushButton;
-class QTimer;
+class QScrollArea;
+class QThread;
+class QToolButton;
+class QVBoxLayout;
+class BrightnessWorker;
+class ClickSlider;
+class FlowLayout;
+class PresetCard;
+class ResponsiveGrid;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
+
+signals:
+    void requestScan();
+    void requestApply(const QString& id, int value);
+
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
 private slots:
     void refreshDisplays();
-    void applyPreset(const QString& name, int value);
-    void saveCustomPreset();
-    void removeCustomPreset(const QString& name);
+    void onScanned(const QVector<DisplayInfo>& displays);
+    void onApplied(const QString& id, int value, bool ok, const QString& error);
+    void showSettingsMenu();
 
 private:
-    struct DisplayWidgets {
+    struct DisplayCard {
         QString id;
+        QString name;
+        bool controllable = false;
         QLabel* value = nullptr;
-        QSlider* slider = nullptr;
-        QLabel* status = nullptr;
-        QTimer* debounce = nullptr;
+        ClickSlider* slider = nullptr;
     };
 
-    QVector<DisplayInfo> m_displays;
-    QVector<DisplayWidgets> m_widgets;
-    QWidget* m_listHost = nullptr;
-    QVBoxLayout* m_listLayout = nullptr;
-    QHBoxLayout* m_customPresetLayout = nullptr;
-    QLabel* m_status = nullptr;
-    QLabel* m_count = nullptr;
-    QMap<QString, int> m_customPresets;
+    // theme / chrome
+    void applyTheme();
+    void applyWindowChrome();
 
-    void buildDisplayCards();
+    // presets
     void loadCustomPresets();
-    void rebuildCustomPresetButtons();
+    void saveCustomPresets() const;
+    void rebuildPresets();
+    void updatePresetHighlight();
+    void applyPreset(const QString& name, int value);
+    void createCustomPreset();
+    void removeCustomPreset(const QString& name);
+    int currentBrightnessGuess() const;
+
+    // displays
+    void buildDisplayCards();
+    QWidget* makeDisplayCard(int index);
+    QWidget* makeEmptyCard();
     void setDisplayBrightness(int index, int value);
-    void setPresetButtonState(const QString& name);
+    void queueApply(const QString& id, int value);
+
+    void setStatus(const QString& text, bool error = false);
+
+    Theme m_theme;
+    QVBoxLayout* m_root = nullptr;
+    QLabel* m_logo = nullptr;
+    QToolButton* m_refreshButton = nullptr;
+    QToolButton* m_settingsButton = nullptr;
+    QWidget* m_presetHost = nullptr;
+    FlowLayout* m_presetFlow = nullptr;
+    QLabel* m_count = nullptr;
+    QLabel* m_status = nullptr;
+    ResponsiveGrid* m_grid = nullptr;
+
+    QVector<DisplayInfo> m_displays;
+    QVector<DisplayCard> m_cards;
+    QMap<QString, int> m_customPresets;
+    QString m_activePreset;
+
+    QThread* m_thread = nullptr;
+    BrightnessWorker* m_worker = nullptr;
+    bool m_scanning = false;
+    int m_pending = 0;
+    QString m_okMessage;
+    QStringList m_errors;
+    int m_marginMode = -1;
+    bool m_chromeApplied = false;
 };
